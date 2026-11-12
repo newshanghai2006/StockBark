@@ -1,0 +1,23 @@
+services:
+  tixing:
+    build: .
+    image: tixing:local
+    container_name: tixing
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请先复制 .env.example 为 .env 并设置管理密码}
+      TZ: Asia/Shanghai
+      DATA_DIR: /app/data
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - tixing-data:/app/data
+    mem_limit: 192m
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+volumes:
+  tixing-data:

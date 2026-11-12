@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101716">
+  <title>盯盘 · KDJ 股票提醒</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23101716'/%3E%3Cpath d='M7 28l9-11 7 5 10-13' stroke='%23c3f381' stroke-width='4' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/charts.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">↗</div><span class="eyebrow">STOCK WATCH / KDJ</span>
+      <h1>让信号来找你。</h1><p class="muted">日线、5 分钟、15 分钟。<br>在你设定的时刻，收到一条提醒。</p>
+      <label>管理密码<input id="password" type="password" autocomplete="current-password" required minlength="12" placeholder="输入部署时设置的密码"></label>
+      <button type="submit" class="primary full">进入控制台 <span>→</span></button>
+      <p id="login-error" class="error-text" role="alert"></p>
+      <small>配置和记录保存在你的服务器上</small>
+    </form>
+  </section>
+
+  <div id="app-screen" class="app-shell" hidden>
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark small">↗</span><strong>盯盘<span>KDJ WATCH</span></strong></a>
+      <nav aria-label="主要导航">
+        <button class="nav-item active" data-tab="overview"><span>◫</span>行情概览</button>
+        <button class="nav-item" data-tab="stocks"><span>⌗</span>自选股票</button>
+        <button class="nav-item" data-tab="rules"><span>⎇</span>提醒规则</button>
+        <button class="nav-item" data-tab="targets"><span>♧</span>Bark 设备</button>
+        <button class="nav-item" data-tab="history"><span>◷</span>提醒记录</button>
+        <button class="nav-item" data-tab="settings"><span>⚙</span>监控设置</button>
+      </nav>
+      <div class="sidebar-bottom"><div class="local-pill"><i></i> Asia / Shanghai</div><p>观察信号，保留自己的判断。</p><button id="logout" class="text-button">退出登录 ↗</button></div>
+    </aside>
+    <main>
+      <header class="topbar"><span id="breadcrumb">工作台 / 行情概览</span><span class="topbar-right"><i class="live-dot"></i> 服务在线 <span id="clock"></span><button id="mobile-logout" class="text-button">退出</button></span></header>
+      <section class="page-header"><div><div class="eyebrow">YOUR PERSONAL MARKET RADAR</div><h1 id="page-title">行情概览<span class="title-dot">.</span></h1><p id="page-description">把关注交给规则，把时间留给自己。</p></div><div id="page-actions"></div></section>
+      <div id="global-notice" class="notice" hidden></div>
+
+      <section id="tab-overview" class="tab-panel">
+        <div class="stats-grid">
+          <article class="stat"><span>监控股票</span><strong id="stat-stocks">0<small>支</small></strong><div>追踪你关心的标的</div></article>
+          <article class="stat"><span>启用规则</span><strong id="stat-rules">0<small>条</small></strong><div>多周期 · 自定义条件</div></article>
+          <article class="stat"><span>推送设备</span><strong id="stat-targets">0<small>台</small></strong><div>Bark 消息直达 iPhone</div></article>
+          <article class="stat accent"><span>监控状态</span><strong id="stat-status" class="status-text">待检查</strong><div id="engine-message">正在读取状态</div></article>
+        </div>
+        <div class="section-title"><h2>信号观察台 <span class="badge">K · D · J</span></h2><span class="muted" id="check-time">数据每 10 秒刷新显示</span></div>
+        <div class="legend"><span><i class="dot k"></i>K 线</span><span><i class="dot d"></i>D 线</span><span><i class="dot j"></i>J 线</span><span class="legend-note">默认：J &gt; 98 且 K &gt; D ／ J &lt; 2 且 K &lt; D</span></div>
+        <div id="watch-grid" class="watch-grid"></div>
+        <div class="footnote">公开行情 · 不复权 · 所有时间均为北京时间。最新 K 线的时间以卡片为准。</div>
+      </section>
+      <section id="tab-stocks" class="tab-panel" hidden><div id="stocks-list" class="card-list"></div></section>
+      <section id="tab-rules" class="tab-panel" hidden><div class="info-note">每条规则独立判断，可以选择全部股票或指定股票，并分别设置周期、冷却时间和推送设备。</div><div id="rules-list" class="rule-grid"></div></section>
+      <section id="tab-targets" class="tab-panel" hidden><div class="info-note">在 iPhone 的 Bark App 中复制设备 Key（推送链接中域名之后的那一段）。支持多个设备和自建 Bark 服务。</div><div id="targets-list" class="card-list"></div></section>
+      <section id="tab-history" class="tab-panel" hidden><div id="history-list" class="card-list"></div><div id="history-pagination" class="pagination"></div></section>
+      <section id="tab-settings" class="tab-panel" hidden>
+        <form id="settings-form" class="settings-card">
+          <div class="form-section"><h2>行情与检查</h2><div class="form-grid">
+            <label>检查间隔（秒）<input name="poll_seconds" type="number" min="30" max="3600" required><small>建议 60 秒；最小 30 秒</small></label>
+            <label>行情来源<select name="provider"><option value="auto">自动 · 东方财富，失败切换腾讯</option><option value="eastmoney">东方财富</option><option value="tencent">腾讯财经</option></select></label>
+          </div><label class="check-line"><input name="market_only" type="checkbox">仅在 A 股交易时段自动检查（工作日 09:30–11:32、13:00–15:06）</label><label class="check-line"><input name="completed_only" type="checkbox">只使用已收盘 K 线（推荐，日线 15:01 后判断）</label><p class="help">关闭“已收盘”后，盘中的 KDJ 会随价格变化。节假日无当日数据时不发送提醒；手动检查也遵循数据日期校验。</p></div>
+          <div class="form-section"><h2>默认参数</h2><div class="form-grid four"><label>KDJ · N<input name="kdj_n" type="number" min="2" max="120" required></label><label>K 平滑 · M1<input name="kdj_m1" type="number" min="1" max="60" required></label><label>D 平滑 · M2<input name="kdj_m2" type="number" min="1" max="60" required></label><label>冷却时间（分钟）<input name="cooldown_minutes" type="number" min="0" max="10080" required></label></div><p class="help">常用 KDJ 参数为 9 / 3 / 3。个别股票可以覆盖默认参数，个别规则可以覆盖默认冷却时间。</p></div>
+          <div class="form-section"><h2>发送策略</h2><p class="help">同一规则、股票、周期、K 线最多创建一条提醒。发送失败会在 60 秒、300 秒后重试，最多尝试 3 次；超过 1 小时的信号停止重试。提醒记录保留 90 天。</p><p class="help">条件由“不满足”变成“满足”时，触发“进入条件”提醒；冷却期内的信号会被略过。切换到“每根 K 线”后，条件持续满足时也可提醒，仍受冷却时间限制。</p></div>
+          <button class="primary" type="submit">保存设置</button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="editor"><form id="editor-form"><div class="dialog-heading"><div><span class="eyebrow" id="editor-eyebrow">CONFIGURATION</span><h2 id="editor-title"></h2></div><button type="button" id="close-editor" class="icon-button" aria-label="关闭">×</button></div><div id="editor-fields"></div><div class="dialog-footer"><span id="editor-error" class="error-text" role="alert"></span><button type="button" id="cancel-editor" class="secondary">取消</button><button type="submit" id="save-editor" class="primary">保存配置</button></div></form></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>
