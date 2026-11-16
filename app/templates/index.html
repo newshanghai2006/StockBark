@@ -8,6 +8,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23101716'/%3E%3Cpath d='M7 28l9-11 7 5 10-13' stroke='%23c3f381' stroke-width='4' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/charts.css">
+  <script src="/static/notifications.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -58,6 +59,21 @@
       <section id="tab-history" class="tab-panel" hidden><div id="history-list" class="card-list"></div><div id="history-pagination" class="pagination"></div></section>
       <section id="tab-settings" class="tab-panel" hidden>
         <form id="settings-form" class="settings-card">
+          <div class="form-section"><h2>浏览器桌面通知</h2>
+            <label class="check-line"><input name="browser_enabled" type="checkbox">启用浏览器提醒通道（无需 Bark 设备）</label>
+            <p class="help">沿用提醒规则的股票、周期、条件、触发方式和冷却时间。先保存通道设置，再为每台电脑单独授权。关闭页面后不接收桌面通知；Bark 仍可后台推送。</p>
+            <p id="browser-status" class="info-note" role="status">正在检查当前浏览器通知能力…</p>
+            <div class="action-stack"><button id="browser-enable" class="ghost" type="button">启用当前浏览器</button><button id="browser-test" class="secondary" type="button">测试桌面通知</button><button id="browser-disable" class="secondary" type="button">停止当前浏览器</button></div>
+            <p class="help">需要 HTTPS 或 localhost。使用云服务器时，可通过 SSH 隧道访问本地地址；Windows 请允许 Edge / Chrome 的通知，并检查勿扰模式。浏览器休眠或系统睡眠可能延迟提醒。</p>
+            <label class="browser-template-select">通知内容<select name="browser_template_mode"><option value="rule">跟随每条规则的标题与正文（默认）</option><option value="custom">自定义桌面通知模板</option></select></label>
+            <div id="browser-custom-fields" hidden>
+              <label>桌面通知标题<input name="browser_title" required maxlength="200"></label>
+              <label>桌面通知正文<textarea name="browser_body" required maxlength="2000"></textarea></label>
+              <button id="browser-preset" class="ghost" type="button">填入预设内容</button>
+              <p class="help">变量：<code>{name}</code> <code>{symbol}</code> <code>{code}</code> <code>{period}</code> <code>{rule}</code> <code>{J}</code> <code>{K}</code> <code>{D}</code> <code>{RSV}</code> <code>{close}</code> <code>{bar_time}</code> <code>{time}</code>。正文可能被系统截断，完整内容保留在提醒记录中。</p>
+            </div>
+            <p class="help">“测试桌面通知”使用当前表单和示例行情，不需要先保存；正式提醒使用已保存模板。浏览器权限和本机开关互相独立，每个浏览器需分别启用。</p>
+          </div>
           <div class="form-section"><h2>行情与检查</h2><div class="form-grid">
             <label>检查间隔（秒）<input name="poll_seconds" type="number" min="30" max="3600" required><small>建议 60 秒；最小 30 秒</small></label>
             <label>行情来源<select name="provider"><option value="auto">自动 · 东方财富，失败切换腾讯</option><option value="eastmoney">东方财富</option><option value="tencent">腾讯财经</option></select></label>

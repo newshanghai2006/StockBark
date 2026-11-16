@@ -40,6 +40,7 @@ function toast(message) {
 }
 
 function showLogin() {
+  desktop.reset();
   state = null;
   csrf = "";
   $("#login-screen").hidden = false;
@@ -61,9 +62,10 @@ async function loadState(silent = false) {
     renderRules();
     renderTargets();
     if (first) fillSettings();
+    await desktop.sync(state);
     if (activeTab === "history") await loadHistory();
-    $("#global-notice").hidden = state.targets.some(t => t.enabled);
-    $("#global-notice").textContent = "还没有启用的 Bark 设备。添加设备并发送测试消息后，即可接收股票提醒。";
+    $("#global-notice").hidden = state.targets.some(t => t.enabled) || state.settings.browser_enabled;
+    $("#global-notice").textContent = "尚未启用提醒通道。请添加 Bark 设备，或在“监控设置”中启用浏览器桌面通知。";
   } catch (error) {
     if (state && !silent) toast(error.message);
     else if (state) {
@@ -140,7 +142,7 @@ function formatDate(value) {
 
 async function loadHistory() {
   const data = await api("history?page=" + historyPage);
-  $("#history-list").innerHTML = data.items.map(item => `<article class="list-card history-card"><div class="history-top"><h3>${h(item.title)}</h3><span class="pill">${h(formatDate(item.created_at))}</span></div><span class="symbol">${h(item.symbol.toUpperCase())} / ${h(periodNames[item.period])} / K线 ${h(item.bar_time)}</span><pre>${h(item.body)}</pre>${item.deliveries.map(d => `<div class="delivery-row"><span class="${h(d.status)}">${{sent:"● 已发送", pending:"◷ 等待重试", failed:"× 发送失败"}[d.status]}</span> · ${h(d.target_name)} · 尝试 ${d.attempts}/3${d.error ? " · " + h(d.error) : ""}</div>`).join("")}</article>`).join("") || empty("还没有触发记录", "当规则满足时，触发内容与各设备的发送结果会显示在这里。");
+  $("#history-list").innerHTML = data.items.map(item => `<article class="list-card history-card"><div class="history-top"><h3>${h(item.title)}</h3><span class="pill">${h(formatDate(item.created_at))}</span></div><span class="symbol">${h(item.symbol.toUpperCase())} / ${h(periodNames[item.period])} / K线 ${h(item.bar_time)}</span><pre>${h(item.body)}</pre>${item.browser_title !== null ? `<div class="delivery-row">◫ 已生成桌面通知内容（不代表系统已展示）</div><pre>${h(item.browser_title)}\n${h(item.browser_body)}</pre>` : ""}${item.deliveries.map(d => `<div class="delivery-row"><span class="${h(d.status)}">${{sent:"● 已发送", pending:"◷ 等待重试", failed:"× 发送失败"}[d.status]}</span> · ${h(d.target_name)} · 尝试 ${d.attempts}/3${d.error ? " · " + h(d.error) : ""}</div>`).join("")}</article>`).join("") || empty("还没有触发记录", "当规则满足时，触发内容与各设备的发送结果会显示在这里。");
   const pages = Math.max(1, Math.ceil(data.total / 25));
   $("#history-pagination").innerHTML = `<button class="secondary" type="button" data-page="${historyPage - 1}" ${historyPage <= 1 ? "disabled" : ""}>上一页</button><span>${historyPage} / ${pages} · ${data.total} 条</span><button class="secondary" type="button" data-page="${historyPage + 1}" ${historyPage >= pages ? "disabled" : ""}>下一页</button>`;
 }
@@ -154,6 +156,7 @@ function fillSettings() {
     if (field.type === "checkbox") field.checked = value;
     else field.value = value;
   }
+  desktop.updateTemplateFields();
 }
 
 function switchTab(tab) {
@@ -279,7 +282,7 @@ $("#settings-form").addEventListener("submit", async event => {
   const form = event.currentTarget;
   const data = Object.fromEntries(new FormData(form));
   for (const key of ["poll_seconds", "kdj_n", "kdj_m1", "kdj_m2", "cooldown_minutes"]) data[key] = Number(data[key]);
-  for (const key of ["market_only", "completed_only"]) data[key] = form.elements.namedItem(key).checked;
+  for (const key of ["market_only", "completed_only", "browser_enabled"]) data[key] = form.elements.namedItem(key).checked;
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   try { await api("settings", "PUT", data); toast("监控设置已保存，下次检查生效"); await loadState(); }
@@ -320,5 +323,6 @@ document.addEventListener("click", async event => {
 
 setInterval(() => { $("#clock").textContent = new Date().toLocaleTimeString("zh-CN", {timeZone:"Asia/Shanghai", hour12:false}); }, 1000);
 setInterval(() => { if (state && !document.hidden) loadState(true); }, 10000);
+const desktop = new DesktopNotifications({api, toast, openHistory: () => switchTab("history")});
 switchTab("overview");
 loadState(true);

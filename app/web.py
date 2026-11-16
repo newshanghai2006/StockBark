@@ -18,6 +18,8 @@ from .db import connect, decode, init_db, settings
 from .engine import Engine
 from .indicators import validate_condition
 from .market import normalize_symbol
+from .market import now_cn
+from .notifications import browser_content, validate_browser_settings
 
 
 JSON_FIELDS = {"stocks": ("periods",), "rules": ("stock_ids", "periods", "condition", "target_ids"), "targets": ()}
@@ -164,7 +166,8 @@ def create_app(data_dir=None, password=None, start_engine=False, testing=False):
     @app.get("/api/state")
     def state():
         with connect(db_path) as c:
-            data = {"csrf": session["csrf"], "settings": settings(c), "status": engine.get_status(), "template_fields": sorted(TEMPLATE_FIELDS)}
+            data = {"csrf": session["csrf"], "settings": settings(c), "status": engine.get_status(), "template_fields": sorted(TEMPLATE_FIELDS),
+                    "notification_scope": hashlib.sha256(secret.encode()).hexdigest()[:20]}
             for table, fields in JSON_FIELDS.items():
                 data[table] = [decode(row, fields) for row in c.execute(f"SELECT * FROM {table} ORDER BY id")]
             for target in data["targets"]:
@@ -191,8 +194,45 @@ def create_app(data_dir=None, password=None, start_engine=False, testing=False):
         if config["provider"] not in ("auto", "eastmoney", "tencent"):
             raise ValueError("行情源无效")
         with connect(db_path) as c:
+            c.execute("BEGIN IMMEDIATE")
+            config.update(validate_browser_settings(data, settings(c)))
             c.execute("UPDATE settings SET value=? WHERE id=1", (json.dumps(config),))
         return jsonify(ok=True)
+
+    @app.get("/api/browser-events")
+    def browser_events():
+        raw_after = request.args.get("after")
+        after = integer(raw_after, 0, 9223372036854775807) if raw_after is not None else None
+        cutoff = (now_cn() - timedelta(minutes=5)).isoformat()
+        with connect(db_path) as c:
+            c.execute("BEGIN")
+            enabled = settings(c)["browser_enabled"]
+            head = c.execute("SELECT COALESCE(MAX(id),0) FROM alerts").fetchone()[0]
+            # No cursor means establish a baseline, never replay historical alerts.
+            if after is None or not enabled:
+                return jsonify(enabled=enabled, cursor=head, items=[])
+            rows = [dict(r) for r in c.execute("""SELECT a.id,a.browser_title AS title,a.browser_body AS body,a.created_at
+                FROM alerts a JOIN rules r ON r.id=a.rule_id AND r.enabled=1
+                JOIN stocks s ON s.symbol=a.symbol AND s.enabled=1
+                WHERE a.id>? AND a.id<=? AND a.browser_title IS NOT NULL AND a.created_at>=?
+                ORDER BY a.id LIMIT 100""", (after, head, cutoff))]
+        cursor = rows[-1]["id"] if len(rows) == 100 else head
+        return jsonify(enabled=enabled, cursor=cursor, items=rows)
+
+    @app.post("/api/browser-preview")
+    def browser_preview():
+        data = request.get_json()
+        if not isinstance(data, dict):
+            raise ValueError("配置格式无效")
+        with connect(db_path) as c:
+            config = validate_browser_settings(data, settings(c))
+        values = {"symbol": "sh688605", "code": "688605", "name": "先锋精科", "period": "5分钟",
+                  "rule": "J 高位提醒", "K": 85.0, "D": 75.0, "J": 105.0, "RSV": 90.0,
+                  "close": 50.0, "bar_time": "示例 K 线时间", "time": now_cn().strftime("%Y-%m-%d %H:%M:%S")}
+        from .bark import render_template
+        from .db import DEFAULT_BODY
+        title, body = browser_content(config, render_template("{name} · {rule}", values), render_template(DEFAULT_BODY, values), values)
+        return jsonify(title="[测试] " + title, body=body + "\n仅为模板测试，不代表真实行情。")
 
     @app.post("/api/<table>")
     @app.put("/api/<table>/<int:row_id>")

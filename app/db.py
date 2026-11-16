@@ -13,6 +13,10 @@ DEFAULT_SETTINGS = {
     "kdj_m2": 3,
     "cooldown_minutes": 30,
     "provider": "auto",
+    "browser_enabled": False,
+    "browser_template_mode": "rule",
+    "browser_title": "{name} · {rule}",
+    "browser_body": "{symbol} · {period}\nJ={J} K={K} D={D}\n价格：{close}\nK线：{bar_time}",
 }
 DEFAULT_BODY = "{name} ({symbol}) · {period}\nJ={J} K={K} D={D}\n价格：{close}\nK线时间：{bar_time}\n条件：{rule}"
 
@@ -82,6 +86,11 @@ def init_db(path):
         );
         CREATE INDEX IF NOT EXISTS idx_deliveries_pending ON deliveries(status,next_retry);
         """)
+        # Existing installations retain their settings, records, and Bark behavior.
+        alert_columns = {r[1] for r in c.execute("PRAGMA table_info(alerts)")}
+        for column in ("browser_title", "browser_body"):
+            if column not in alert_columns:
+                c.execute(f"ALTER TABLE alerts ADD COLUMN {column} TEXT")
         # Seed only on first initialization; intentionally deleted examples stay deleted.
         if c.execute("SELECT 1 FROM settings WHERE id=1").fetchone() is None:
             c.execute("INSERT INTO settings VALUES (1,?)", (json.dumps(DEFAULT_SETTINGS),))

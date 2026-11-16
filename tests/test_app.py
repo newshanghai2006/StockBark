@@ -11,6 +11,7 @@ from app.db import connect, decode, init_db, settings
 from app.engine import Engine
 from app.indicators import kdj, matches, validate_condition
 from app.market import MarketClient, SHANGHAI, closed_bars, in_market, is_stale, normalize_symbol
+from app.market import now_cn
 from app.web import create_app
 
 
@@ -186,6 +187,86 @@ class AppTest(unittest.TestCase):
         self.client.delete(f"/api/targets/{first}",headers=self.headers)
         self.assertGreater(self.add_target("new"),first)
 
+    def test_browser_settings_default_and_validation(self):
+        original = self.client.get("/api/state").json["settings"]
+        self.assertFalse(original["browser_enabled"])
+        configured = {**original, "browser_enabled": True, "browser_template_mode": "custom",
+                      "browser_title": "{name} / {rule}", "browser_body": "J={J} 价格={close}"}
+        self.assertEqual(self.put("/api/settings", configured).status_code, 200)
+        saved = self.client.get("/api/state").json["settings"]
+        self.assertEqual(saved, configured)
+        for invalid in ({"browser_title": "{J.__class__}"}, {"browser_template_mode": "eval"}, {"browser_enabled": "false"}):
+            self.assertEqual(self.put("/api/settings", {**saved, **invalid}).status_code, 400)
+        # Older clients may save their known settings without erasing new options.
+        old_client = {k: v for k, v in original.items() if not k.startswith("browser_")}
+        self.assertEqual(self.put("/api/settings", old_client).status_code, 200)
+        self.assertTrue(self.client.get("/api/state").json["settings"]["browser_enabled"])
+
+    def test_browser_preview_uses_validated_unsaved_template_without_alert(self):
+        preview = self.post("/api/browser-preview", {"browser_template_mode": "custom",
+                            "browser_title": "{name} {period}", "browser_body": "J={J} K={K} D={D}"})
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.json["title"], "[测试] 先锋精科 5分钟")
+        self.assertIn("J=105.00", preview.json["body"])
+        self.assertIn("不代表真实行情", preview.json["body"])
+        self.assertEqual(self.client.get("/api/history").json["total"], 0)
+        self.assertEqual(self.post("/api/browser-preview", {"browser_body": "{unknown}"}).status_code, 400)
+        anonymous = self.app.test_client()
+        self.assertEqual(anonymous.get("/api/browser-events").status_code, 401)
+        self.assertEqual(self.client.post("/api/browser-preview", json={}).status_code, 403)
+
+    def insert_browser_alert(self, stamp, bar_time, desktop=True):
+        with connect(self.db) as c:
+            return c.execute("""INSERT INTO alerts(rule_id,rule_name,symbol,stock_name,period,bar_time,
+                title,body,values_json,created_at,browser_title,browser_body) VALUES (1,'test','sh688605','先锋精科','5',?,
+                '规则标题','规则正文','{}',?,?,?)""", (bar_time, stamp.isoformat(), "桌面标题" if desktop else None, "桌面正文" if desktop else None)).lastrowid
+
+    def test_browser_events_baseline_expiry_order_and_switch(self):
+        config = self.client.get("/api/state").json["settings"]
+        self.put("/api/settings", {**config, "browser_enabled": True})
+        now = now_cn()
+        old_id = self.insert_browser_alert(now - timedelta(minutes=6), "old")
+        first = self.insert_browser_alert(now, "current-1")
+        baseline = self.client.get("/api/browser-events").json
+        self.assertEqual(baseline["items"], [])
+        self.assertEqual(baseline["cursor"], first)
+        second = self.insert_browser_alert(now, "current-2")
+        bark_only = self.insert_browser_alert(now, "bark-only", False)
+        events = self.client.get(f"/api/browser-events?after={old_id}").json
+        self.assertEqual([item["id"] for item in events["items"]], [first, second])
+        self.assertEqual(events["items"][0]["title"], "桌面标题")
+        self.assertEqual(events["cursor"], bark_only)
+        self.assertEqual(self.client.get(f"/api/browser-events?after={bark_only}").json["items"], [])
+        self.assertEqual(self.client.get("/api/browser-events?after=-1").status_code, 400)
+        self.put("/api/settings", {**config, "browser_enabled": False})
+        self.assertFalse(self.client.get("/api/browser-events?after=0").json["enabled"])
+        self.assertEqual(self.client.get("/api/browser-events?after=0").json["items"], [])
+
+    def test_browser_events_pagination_does_not_skip(self):
+        config = self.client.get("/api/state").json["settings"]
+        self.put("/api/settings", {**config, "browser_enabled": True})
+        for i in range(102): self.insert_browser_alert(now_cn(), str(i))
+        first = self.client.get("/api/browser-events?after=0").json
+        second = self.client.get(f"/api/browser-events?after={first['cursor']}").json
+        self.assertEqual(len(first["items"]), 100)
+        self.assertEqual(len(second["items"]), 2)
+
+    def test_browser_schema_upgrade_preserves_data(self):
+        alert_id = self.insert_browser_alert(now_cn(), "legacy")
+        with connect(self.db) as c:
+            c.execute("ALTER TABLE alerts DROP COLUMN browser_title")
+            c.execute("ALTER TABLE alerts DROP COLUMN browser_body")
+            old = {k: v for k, v in settings(c).items() if not k.startswith("browser_")}
+            c.execute("UPDATE settings SET value=?", (json.dumps(old),))
+        init_db(self.db)
+        init_db(self.db)
+        with connect(self.db) as c:
+            alert = c.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+            self.assertEqual(alert["title"], "规则标题")
+            self.assertIsNone(alert["browser_title"])
+            self.assertFalse(settings(c)["browser_enabled"])
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM rules").fetchone()[0], 2)
+
 
 class EngineTest(unittest.TestCase):
     setUp = AppTest.setUp
@@ -290,6 +371,39 @@ class EngineTest(unittest.TestCase):
         with connect(self.db) as c: c.execute("UPDATE targets SET enabled=1")
         self.evaluate()
         self.assertEqual(self.count(),1)
+
+    def test_browser_only_alert_and_template_snapshot(self):
+        self.prepare()
+        with connect(self.db) as c:
+            c.execute("DELETE FROM targets")
+            config = {**settings(c), "browser_enabled": True, "browser_template_mode": "custom",
+                      "browser_title": "桌面 {name}", "browser_body": "{period} J={J} / {rule}"}
+            c.execute("UPDATE settings SET value=?", (json.dumps(config),))
+        # The engine's scan copy is older; the enabled channel is read atomically.
+        self.evaluate()
+        self.evaluate()
+        self.assertEqual(self.count(), 1)
+        self.engine.retry_deliveries(self.now.timestamp())
+        self.sender.assert_not_called()
+        with connect(self.db) as c:
+            alert = c.execute("SELECT * FROM alerts").fetchone()
+            self.assertEqual(alert["browser_title"], "桌面 先锋精科")
+            self.assertIn("5分钟 J=120.00", alert["browser_body"])
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0], 0)
+            self.assertGreater(c.execute("SELECT last_sent FROM rule_state").fetchone()[0], 0)
+
+    def test_browser_and_bark_share_one_trigger_follow_rule_content(self):
+        self.prepare()
+        with connect(self.db) as c:
+            c.execute("UPDATE settings SET value=?", (json.dumps({**settings(c), "browser_enabled": True}),))
+        self.evaluate()
+        self.engine.retry_deliveries(self.now.timestamp())
+        self.assertEqual(self.count(), 1)
+        self.assertEqual(self.sender.call_count, 1)
+        with connect(self.db) as c:
+            alert = c.execute("SELECT * FROM alerts").fetchone()
+            self.assertEqual(alert["browser_title"], alert["title"])
+            self.assertEqual(alert["browser_body"], alert["body"])
 
     def test_outdated_rule_copy_is_ignored(self):
         self.prepare()

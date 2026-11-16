@@ -7,6 +7,7 @@ from .bark import render_template, send_bark
 from .db import connect, decode, settings
 from .indicators import kdj, matches
 from .market import MarketClient, PERIOD_NAMES, closed_bars, in_market, is_stale, now_cn
+from .notifications import browser_content
 
 
 log = logging.getLogger(__name__)
@@ -140,18 +141,24 @@ class Engine:
             targets = [dict(r) for r in c.execute("SELECT * FROM targets WHERE enabled=1")]
             if rule["target_ids"]:
                 targets = [t for t in targets if t["id"] in rule["target_ids"]]
-            if should_send and targets:
+            # Read inside this transaction so disabling browser alerts takes effect
+            # even if the current scan started with older settings.
+            browser_config = settings(c)
+            browser_enabled = browser_config["browser_enabled"]
+            has_channel = bool(targets) or browser_enabled
+            if should_send and has_channel:
                 values = {**current, "symbol": stock["symbol"], "code": stock["symbol"][2:], "name": stock["name"],
                           "period": PERIOD_NAMES[period], "rule": rule["name"], "bar_time": current["time"], "time": now.strftime("%Y-%m-%d %H:%M:%S")}
                 title, body = render_template(rule["title"], values), render_template(rule["body"], values)
-                cursor = c.execute("""INSERT OR IGNORE INTO alerts(rule_id,rule_name,symbol,stock_name,period,bar_time,title,body,values_json,created_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""", (rule["id"], rule["name"], stock["symbol"], stock["name"], period, current["time"], title, body, json.dumps(current), now.isoformat()))
+                desktop_title, desktop_body = browser_content(browser_config, title, body, values) if browser_enabled else (None, None)
+                cursor = c.execute("""INSERT OR IGNORE INTO alerts(rule_id,rule_name,symbol,stock_name,period,bar_time,title,body,values_json,created_at,browser_title,browser_body)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (rule["id"], rule["name"], stock["symbol"], stock["name"], period, current["time"], title, body, json.dumps(current), now.isoformat(), desktop_title, desktop_body))
                 if cursor.rowcount:
                     for target in targets:
                         c.execute("INSERT INTO deliveries(alert_id,target_id,target_name) VALUES (?,?,?)", (cursor.lastrowid, target["id"], target["name"]))
                     last_sent = epoch
-            # Without a recipient, preserve the edge so adding a target can deliver it.
-            remembered = hit if targets else was_hit
+            # With no enabled channel, preserve the edge for later configuration.
+            remembered = hit if has_channel else was_hit
             c.execute("""INSERT INTO rule_state VALUES (?,?,?,?,?) ON CONFLICT(rule_id,stock_id,period)
                 DO UPDATE SET matched=excluded.matched,last_sent=excluded.last_sent""", (rule["id"], stock["id"], period, int(remembered), last_sent))
 
