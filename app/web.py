@@ -17,7 +17,7 @@ from .bark import TEMPLATE_FIELDS, send_bark, validate_server, validate_template
 from .db import connect, decode, init_db, settings
 from .engine import Engine
 from .indicators import validate_condition
-from .market import normalize_symbol
+from .market import PROVIDERS, normalize_symbol
 from .market import now_cn
 from .notifications import browser_content, validate_browser_settings
 
@@ -191,7 +191,7 @@ def create_app(data_dir=None, password=None, start_engine=False, testing=False):
             "cooldown_minutes": integer(data.get("cooldown_minutes"), 0, 10080),
             "provider": data.get("provider"),
         }
-        if config["provider"] not in ("auto", "eastmoney", "tencent"):
+        if config["provider"] != "auto" and config["provider"] not in PROVIDERS:
             raise ValueError("行情源无效")
         with connect(db_path) as c:
             c.execute("BEGIN IMMEDIATE")

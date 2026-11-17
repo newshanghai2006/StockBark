@@ -76,7 +76,7 @@
           </div>
           <div class="form-section"><h2>行情与检查</h2><div class="form-grid">
             <label>检查间隔（秒）<input name="poll_seconds" type="number" min="30" max="3600" required><small>建议 60 秒；最小 30 秒</small></label>
-            <label>行情来源<select name="provider"><option value="auto">自动 · 东方财富，失败切换腾讯</option><option value="eastmoney">东方财富</option><option value="tencent">腾讯财经</option></select></label>
+            <label>行情来源<select name="provider"><option value="auto">自动 · 东方财富 → 腾讯 → 新浪</option><option value="eastmoney">东方财富</option><option value="tencent">腾讯财经</option><option value="sina">新浪财经</option></select></label>
           </div><label class="check-line"><input name="market_only" type="checkbox">仅在 A 股交易时段自动检查（工作日 09:30–11:32、13:00–15:06）</label><label class="check-line"><input name="completed_only" type="checkbox">只使用已收盘 K 线（推荐，日线 15:01 后判断）</label><p class="help">关闭“已收盘”后，盘中的 KDJ 会随价格变化。节假日无当日数据时不发送提醒；手动检查也遵循数据日期校验。</p></div>
           <div class="form-section"><h2>默认参数</h2><div class="form-grid four"><label>KDJ · N<input name="kdj_n" type="number" min="2" max="120" required></label><label>K 平滑 · M1<input name="kdj_m1" type="number" min="1" max="60" required></label><label>D 平滑 · M2<input name="kdj_m2" type="number" min="1" max="60" required></label><label>冷却时间（分钟）<input name="cooldown_minutes" type="number" min="0" max="10080" required></label></div><p class="help">常用 KDJ 参数为 9 / 3 / 3。个别股票可以覆盖默认参数，个别规则可以覆盖默认冷却时间。</p></div>
           <div class="form-section"><h2>发送策略</h2><p class="help">同一规则、股票、周期、K 线最多创建一条提醒。发送失败会在 60 秒、300 秒后重试，最多尝试 3 次；超过 1 小时的信号停止重试。提醒记录保留 90 天。</p><p class="help">条件由“不满足”变成“满足”时，触发“进入条件”提醒；冷却期内的信号会被略过。切换到“每根 K 线”后，条件持续满足时也可提醒，仍受冷却时间限制。</p></div>

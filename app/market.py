@@ -1,3 +1,5 @@
+import json
+import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -7,6 +9,8 @@ import requests
 
 SHANGHAI = timezone(timedelta(hours=8))
 PERIOD_NAMES = {"day": "日线", "5": "5分钟", "15": "15分钟"}
+PROVIDERS = ("eastmoney", "tencent", "sina")
+log = logging.getLogger(__name__)
 
 
 def now_cn():
@@ -26,7 +30,7 @@ def normalize_symbol(raw):
 
 def parse_time(raw):
     raw = str(raw)
-    for fmt in ("%Y-%m-%d %H:%M", "%Y%m%d%H%M", "%Y-%m-%d", "%Y%m%d"):
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y%m%d%H%M", "%Y-%m-%d", "%Y%m%d"):
         try:
             return datetime.strptime(raw, fmt).replace(tzinfo=SHANGHAI)
         except ValueError:
@@ -84,17 +88,21 @@ def clean_bars(bars):
 class MarketClient:
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"})
+        self.session.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
 
     def fetch(self, symbol, period, provider="auto"):
-        providers = ["eastmoney", "tencent"] if provider == "auto" else [provider]
+        if provider != "auto" and provider not in PROVIDERS:
+            raise ValueError("行情源无效")
+        providers = PROVIDERS if provider == "auto" else (provider,)
         errors = []
         for name in providers:
             try:
                 bars, stock_name = getattr(self, "_" + name)(symbol, period)
                 return clean_bars(bars), stock_name, name
-            except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
+            except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
                 # Do not leak upstream URLs/proxy credentials into user-visible errors.
+                log.warning("Market fetch failed: provider=%s symbol=%s period=%s error=%s",
+                            name, symbol, period, type(exc).__name__)
                 errors.append(name)
         raise ValueError("行情获取失败（" + "、".join(errors) + "），请检查服务器网络或切换行情源")
 
@@ -104,7 +112,7 @@ class MarketClient:
             "klt": "101" if period == "day" else period, "fqt": "0", "lmt": "320",
             "beg": "0", "end": "20500101", "fields1": "f1,f2,f3,f4,f5,f6",
             "fields2": "f51,f52,f53,f54,f55,f56",
-        }, timeout=(5, 12))
+        }, headers={"Referer": "https://quote.eastmoney.com/"}, timeout=(5, 12))
         response.raise_for_status()
         data = response.json()["data"]
         bars = []
@@ -122,9 +130,34 @@ class MarketClient:
             url = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
             params = {"param": f"{symbol},m{period},,320"}
             key = f"m{period}"
-        response = self.session.get(url, params=params, timeout=(5, 12))
+        response = self.session.get(url, params=params, headers={"Referer": "https://gu.qq.com/"}, timeout=(5, 12))
         response.raise_for_status()
         data = response.json()["data"][symbol]
         bars = [{"time": str(row[0]), "open": float(row[1]), "close": float(row[2]), "high": float(row[3]), "low": float(row[4])} for row in data[key]]
         quote = data.get("qt", {}).get(symbol, [])
         return bars, quote[1] if len(quote) > 1 else ""
+
+    def _sina(self, symbol, period):
+        # Same JSONP endpoint as stocknotify. Its K lines are unadjusted,
+        # matching the existing Eastmoney and Tencent price basis.
+        response = self.session.get(
+            "https://quotes.sina.cn/cn/api/jsonp_v2.php/IO.X=/CN_MarketDataService.getKLineData",
+            params={"symbol": symbol, "scale": 240 if period == "day" else int(period),
+                    "ma": "no", "datalen": 320},
+            headers={"Referer": "https://finance.sina.com.cn/"}, timeout=(5, 12),
+        )
+        response.raise_for_status()
+        text = response.text
+        start, end = text.find("(["), text.rfind("])")
+        if start < 0 or end < start:
+            raise ValueError("新浪 K 线数据格式无效")
+        rows = json.loads(text[start + 1:end + 1])
+        bars = []
+        for row in rows:
+            stamp = parse_time(row["day"])
+            bars.append({
+                "time": stamp.strftime("%Y-%m-%d" if period == "day" else "%Y-%m-%d %H:%M"),
+                **{key: float(row[key]) for key in ("open", "close", "high", "low")},
+            })
+        # Sina K lines do not include the company name; use the saved stock name.
+        return bars, ""

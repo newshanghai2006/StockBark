@@ -98,8 +98,72 @@ class MarketTest(unittest.TestCase):
     def test_errors_are_safe(self):
         market = MarketClient()
         market.session.get = Mock(side_effect=requests.ConnectionError("https://secret:password@proxy"))
-        with self.assertRaises(ValueError) as ctx: market.fetch("sh688605", "5")
+        with self.assertLogs("app.market", level="WARNING") as logs:
+            with self.assertRaises(ValueError) as ctx: market.fetch("sh688605", "5")
         self.assertNotIn("password", str(ctx.exception))
+        self.assertNotIn("password", " ".join(logs.output))
+        self.assertIn("eastmoney、tencent、sina", str(ctx.exception))
+
+    def test_sina_fallback_and_second_precision_timestamps(self):
+        for period, scale in (("day", 240), ("5", 5), ("15", 15)):
+            with self.subTest(period=period):
+                market = MarketClient()
+                response = Mock()
+                response.text = '/* upstream comment */ IO.X=([{"day":"2026-11-12 10:00:00","open":"10","close":"11","high":"12","low":"9"}]);'
+                market.session.get = Mock(side_effect=[requests.ConnectionError(), requests.Timeout(), response])
+                with self.assertLogs("app.market", level="WARNING"):
+                    bars, name, source = market.fetch("sh605117", period)
+                self.assertEqual(source, "sina")
+                self.assertEqual(name, "")
+                self.assertEqual(bars, [{"time": "2026-11-12" if period == "day" else "2026-11-12 10:00",
+                                         "open": 10, "close": 11, "high": 12, "low": 9}])
+                call = market.session.get.call_args.kwargs
+                self.assertEqual(call["params"]["scale"], scale)
+                self.assertEqual(call["params"]["datalen"], 320)
+                self.assertEqual(call["headers"]["Referer"], "https://finance.sina.com.cn/")
+
+    def test_empty_or_malformed_sources_fall_back_to_sina(self):
+        market = MarketClient()
+        east, tencent, sina = Mock(), Mock(), Mock()
+        east.json.return_value = {"data": {"klines": []}}
+        tencent.json.return_value = {"data": {"sh605117": {"qfqday": [["2026-11-12", "1", "2", "3", "1"]]}}}
+        sina.text = 'IO.X=([{"day":"2026-11-12","open":"10","close":"11","high":"12","low":"9"}]);'
+        market.session.get = Mock(side_effect=[east, tencent, sina])
+        with self.assertLogs("app.market", level="WARNING"):
+            bars, _, source = market.fetch("sh605117", "day")
+        self.assertEqual((source, bars[0]["close"]), ("sina", 11))
+
+    def test_sina_invalid_empty_or_nonfinite_data_is_rejected(self):
+        for text in ('<html>blocked</html>', 'IO.X=([])', 'IO.X=([invalid])',
+                     'IO.X=([{"day":"2026-11-12","open":"10","close":"NaN","high":"12","low":"9"}])'):
+            with self.subTest(text=text):
+                market = MarketClient()
+                response = Mock(text=text)
+                market.session.get = Mock(return_value=response)
+                with self.assertLogs("app.market", level="WARNING"):
+                    with self.assertRaisesRegex(ValueError, "行情获取失败（sina）"):
+                        market.fetch("sh605117", "day", "sina")
+                self.assertEqual(market.session.get.call_count, 1)
+
+    def test_tencent_daily_keeps_unadjusted_prices_and_correct_referer(self):
+        market = MarketClient()
+        response = Mock()
+        response.json.return_value = {"data": {"sh605117": {
+            "day": [["2026-11-12", "10", "11", "12", "9"]],
+            "qfqday": [["2026-11-12", "1", "2", "3", "1"]]}}}
+        market.session.get = Mock(return_value=response)
+        bars, _, source = market.fetch("sh605117", "day", "tencent")
+        self.assertEqual((source, bars[0]["close"]), ("tencent", 11))
+        call = market.session.get.call_args.kwargs
+        self.assertEqual(call["params"]["param"], "sh605117,day,,,320,")
+        self.assertEqual(call["headers"]["Referer"], "https://gu.qq.com/")
+
+    def test_invalid_provider_is_rejected_before_network_request(self):
+        market = MarketClient()
+        market.session.get = Mock()
+        with self.assertRaisesRegex(ValueError, "行情源无效"):
+            market.fetch("sh605117", "day", "invalid")
+        market.session.get.assert_not_called()
 
 
 class AppTest(unittest.TestCase):
@@ -181,6 +245,12 @@ class AppTest(unittest.TestCase):
         response=self.client.get("/api/state")
         self.assertEqual(response.status_code,200)
         self.assertIsNone(response.json["snapshots"][0]["data"])
+
+    def test_sina_provider_settings_roundtrip(self):
+        config = self.client.get("/api/state").json["settings"]
+        self.assertEqual(self.put("/api/settings", {**config, "provider": "sina"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/state").json["settings"]["provider"], "sina")
+        self.assertEqual(self.put("/api/settings", {**config, "provider": "invalid"}).status_code, 400)
 
     def test_id_not_reused_after_deletion(self):
         first=self.add_target()

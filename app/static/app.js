@@ -112,7 +112,7 @@ function renderOverview() {
         ${data ? `<div class="price-line"><strong>${num(data.close)}</strong><span>CNY / 最新收盘价</span></div>
           <div class="kdj-grid"><div><span><i class="dot k"></i>K</span><strong>${num(data.K)}</strong></div><div><span><i class="dot d"></i>D</span><strong>${num(data.D)}</strong></div><div><span><i class="dot j"></i>J</span><strong class="${data.J > 98 ? "high" : data.J < 2 ? "low" : ""}">${num(data.J)}</strong></div></div>
           ${renderChart(data.history)}<div class="signal-label">${data.stale ? "历史快照 · 不推送" : data.signals?.length ? "● " + h(data.signals.join(" / ")) : "○ 暂无满足的规则"}</div>
-          <div class="watch-bottom"><span>${h(data.time)}</span><span>${h(data.source === "tencent" ? "腾讯" : "东方财富")} · ${data.kdj_n}/${data.kdj_m1}/${data.kdj_m2}</span></div>` : `<div class="no-data">等待获取 K 线与 KDJ 数据<br><p class="help">可点击“立即检查”获取行情</p></div>`}
+          <div class="watch-bottom"><span>${h(data.time)}</span><span>${h(({eastmoney: "东方财富", tencent: "腾讯", sina: "新浪"})[data.source] || data.source)} · ${data.kdj_n}/${data.kdj_m1}/${data.kdj_m2}</span></div>` : `<div class="no-data">等待获取 K 线与 KDJ 数据<br><p class="help">可点击“立即检查”获取行情</p></div>`}
         ${snapshot?.error ? `<div class="inline-error">${h(snapshot.error)}${data ? " · 上方为上次成功快照" : ""}</div>` : ""}
       </article>`);
     }
