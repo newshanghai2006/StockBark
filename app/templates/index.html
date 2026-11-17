@@ -63,7 +63,7 @@
             <label class="check-line"><input name="browser_enabled" type="checkbox">启用浏览器提醒通道（无需 Bark 设备）</label>
             <p class="help">沿用提醒规则的股票、周期、条件、触发方式和冷却时间。先保存通道设置，再为每台电脑单独授权。关闭页面后不接收桌面通知；Bark 仍可后台推送。</p>
             <p id="browser-status" class="info-note" role="status">正在检查当前浏览器通知能力…</p>
-            <div class="action-stack"><button id="browser-enable" class="ghost" type="button">启用当前浏览器</button><button id="browser-test" class="secondary" type="button">测试桌面通知</button><button id="browser-disable" class="secondary" type="button">停止当前浏览器</button></div>
+            <div class="action-stack"><button id="browser-enable" class="ghost" type="button">启用当前浏览器</button><button id="browser-test" class="secondary" type="button">测试桌面通知</button><button id="browser-demo" class="secondary" type="button">演示弹窗与声音</button><button id="browser-disable" class="secondary" type="button">停止当前浏览器</button></div>
             <p class="help">需要 HTTPS 或 localhost。使用云服务器时，可通过 SSH 隧道访问本地地址；Windows 请允许 Edge / Chrome 的通知，并检查勿扰模式。浏览器休眠或系统睡眠可能延迟提醒。</p>
             <label class="browser-template-select">通知内容<select name="browser_template_mode"><option value="rule">跟随每条规则的标题与正文（默认）</option><option value="custom">自定义桌面通知模板</option></select></label>
             <div id="browser-custom-fields" hidden>
@@ -87,6 +87,14 @@
   </div>
 
   <dialog id="editor"><form id="editor-form"><div class="dialog-heading"><div><span class="eyebrow" id="editor-eyebrow">CONFIGURATION</span><h2 id="editor-title"></h2></div><button type="button" id="close-editor" class="icon-button" aria-label="关闭">×</button></div><div id="editor-fields"></div><div class="dialog-footer"><span id="editor-error" class="error-text" role="alert"></span><button type="button" id="cancel-editor" class="secondary">取消</button><button type="submit" id="save-editor" class="primary">保存配置</button></div></form></dialog>
+  <section id="browser-alert-modal" class="browser-alert-modal" hidden aria-live="assertive" aria-modal="true" role="dialog" aria-labelledby="browser-alert-title">
+    <div id="browser-alert-card" class="browser-alert-card">
+      <span id="browser-alert-badge" class="browser-alert-badge">股票提醒</span>
+      <h2 id="browser-alert-title">KDJ 信号提醒</h2>
+      <p id="browser-alert-body"></p>
+      <button id="browser-alert-close" class="primary" type="button">我知道了</button>
+    </div>
+  </section>
   <div id="toast" role="status" hidden></div>
 </body>
 </html>

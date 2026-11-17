@@ -11,10 +11,18 @@ class DesktopNotifications {
     this.busy = false;
     this.generation = 0;
     this.active = new Set();
+    this.modalQueue = [];
+    this.modalOpen = false;
+    this.audio = null;
     this.error = "";
     document.querySelector("#browser-enable").addEventListener("click", () => this.enable());
     document.querySelector("#browser-disable").addEventListener("click", () => this.disable());
     document.querySelector("#browser-test").addEventListener("click", () => this.test());
+    document.querySelector("#browser-demo").addEventListener("click", () => this.demo());
+    document.querySelector("#browser-alert-close").addEventListener("click", () => this.closeModal());
+    document.querySelector("#browser-alert-modal").addEventListener("click", event => {
+      if (event.target.id === "browser-alert-modal") this.closeModal();
+    });
     document.querySelector("#browser-preset").addEventListener("click", () => {
       const form = document.querySelector("#settings-form");
       form.elements.browser_template_mode.value = "custom";
@@ -40,7 +48,8 @@ class DesktopNotifications {
   }
   supported() { return window.isSecureContext && "Notification" in window; }
   optedIn() { return Boolean(this.scope) && this.read("enabled") === "true"; }
-  ready() { return this.config?.browser_enabled && this.optedIn() && this.supported() && Notification.permission === "granted"; }
+  // Page alerts work without OS permission; permission only adds a Windows notification.
+  ready() { return this.config?.browser_enabled && this.optedIn(); }
 
   sync(state) {
     if (this.scope !== state.notification_scope || this.config?.browser_enabled !== state.settings.browser_enabled) {
@@ -60,6 +69,8 @@ class DesktopNotifications {
     this.error = "";
     for (const notification of this.active) notification.close();
     this.active.clear();
+    this.modalQueue = [];
+    this.closeModal();
   }
 
   updateTemplateFields() {
@@ -71,14 +82,14 @@ class DesktopNotifications {
     const status = document.querySelector("#browser-status");
     const enable = document.querySelector("#browser-enable");
     const test = document.querySelector("#browser-test");
-    enable.disabled = test.disabled = !this.supported() || Notification.permission === "denied";
+    enable.disabled = test.disabled = false;
     document.querySelector("#browser-disable").disabled = !this.optedIn();
-    if (!window.isSecureContext) status.textContent = "当前地址不支持系统通知：请改用 HTTPS，或通过 SSH 隧道访问 http://localhost:8089。";
+    if (!window.isSecureContext) status.textContent = "当前地址不支持 Windows 系统通知；页面弹窗和提示音仍可用。需要系统通知请改用 HTTPS，或通过 SSH 隧道访问 http://localhost:8089。";
     else if (!("Notification" in window)) status.textContent = "当前浏览器不支持桌面通知，请使用桌面版 Edge / Chrome / Firefox。";
-    else if (Notification.permission === "denied") status.textContent = "通知权限已被拒绝。请在浏览器地址栏的网站权限中允许通知，再点击“启用当前浏览器”。";
+    else if (Notification.permission === "denied") status.textContent = "Edge 系统通知权限已被拒绝；页面弹窗和提示音仍可用。请在浏览器地址栏的网站权限中改为允许，再重新测试系统通知。";
     else if (this.error) status.textContent = this.error;
     else if (!this.optedIn()) status.textContent = "当前浏览器未启用。点击下方按钮授权通知；此偏好仅保存到当前浏览器。";
-    else if (Notification.permission !== "granted") status.textContent = "当前浏览器尚未获得通知权限，请再次点击“启用当前浏览器”。";
+    else if (Notification.permission !== "granted") status.textContent = "当前浏览器已启用页面弹窗；Edge 系统通知尚未授权，授权后会同时显示 Windows 通知。";
     else if (!this.config?.browser_enabled) status.textContent = "当前浏览器已授权；请勾选“启用浏览器提醒通道”并保存设置。";
     else status.textContent = "当前浏览器已启用：页面保持打开并登录即可接收新信号，后台标签页也会检查。";
   }
@@ -91,14 +102,15 @@ class DesktopNotifications {
   }
 
   async enable() {
+    let permissionError = "";
+    try { await this.permission(); } catch (error) { permissionError = error.message; }
     try {
-      await this.permission();
       this.write("enabled", "true");
-      this.error = "";
+      this.error = permissionError;
       this.cursor = null;
       this.generation++;
       await this.poll();
-      this.toast("当前浏览器已启用；请确认提醒通道已勾选并保存");
+      this.toast(permissionError ? "页面弹窗已启用；" + permissionError : "当前浏览器已启用系统通知和页面弹窗");
     } catch (error) { this.error = error.message; this.toast(error.message); }
     this.render();
   }
@@ -117,21 +129,76 @@ class DesktopNotifications {
   }
 
   show(title, body, tag) {
-    const notification = new Notification(title, {body, tag, lang: "zh-CN"});
-    this.active.add(notification);
-    notification.onclose = () => this.active.delete(notification);
-    notification.onerror = () => { this.error = "浏览器未能显示系统通知，请检查网站通知权限和操作系统通知设置"; this.render(); };
-    notification.onclick = () => {
-      window.focus();
-      this.openHistory();
-      notification.close();
-    };
+    try {
+      if (!("Notification" in window) || Notification.permission !== "granted") throw new Error("system notification permission unavailable");
+      const notification = new Notification(title, {body, tag, lang: "zh-CN"});
+      this.active.add(notification);
+      notification.onclose = () => this.active.delete(notification);
+      notification.onerror = () => { this.error = "浏览器未能显示系统通知，请检查网站通知权限和操作系统通知设置"; this.render(); };
+      notification.onclick = () => {
+        window.focus();
+        this.openHistory();
+        notification.close();
+      };
+    } catch (_) {
+      this.error = "系统通知未显示，页面弹窗仍会保留；请检查浏览器和 Windows 通知权限";
+      this.render();
+    }
+    this.enqueueModal(title, body);
+  }
+
+  ensureAudio() {
+    if (!this.audio) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return null;
+      this.audio = new AudioContext();
+    }
+    if (this.audio.state === "suspended") this.audio.resume();
+    return this.audio;
+  }
+
+  beep() {
+    try {
+      const context = this.ensureAudio();
+      if (!context) return;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = 720;
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.075, context.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.34);
+      oscillator.connect(gain); gain.connect(context.destination);
+      oscillator.start(); oscillator.stop(context.currentTime + 0.35);
+    } catch (_) {}
+  }
+
+  enqueueModal(title, body) {
+    this.modalQueue.push({title, body});
+    if (!this.modalOpen) this.nextModal();
+  }
+
+  nextModal() {
+    const item = this.modalQueue.shift();
+    if (!item) { this.closeModal(); return; }
+    this.modalOpen = true;
+    document.querySelector("#browser-alert-title").textContent = item.title;
+    document.querySelector("#browser-alert-body").textContent = item.body;
+    document.querySelector("#browser-alert-modal").hidden = false;
+    this.beep();
+  }
+
+  closeModal() {
+    this.modalOpen = false;
+    document.querySelector("#browser-alert-modal").hidden = true;
+    if (this.modalQueue.length) this.nextModal();
   }
 
   async test() {
     const generation = this.generation;
+    let permissionError = "";
+    try { await this.permission(); } catch (error) { permissionError = error.message; }
     try {
-      await this.permission();
       if (generation !== this.generation || !this.config) return;
       const form = document.querySelector("#settings-form");
       const data = await this.api("browser-preview", "POST", {
@@ -141,11 +208,24 @@ class DesktopNotifications {
       });
       // Logging out during a request must not display content from that session.
       if (generation !== this.generation || !this.config) return;
-      this.error = "";
+      this.error = permissionError;
       this.show(data.title, data.body, "stockbark-template-test");
-      this.toast("已请求显示测试通知；Windows 无提示时请检查通知设置和勿扰模式");
+      this.toast(permissionError ? "已显示页面测试弹窗；" + permissionError : "已请求显示 Windows 系统通知");
     } catch (error) { this.error = error.message; this.toast(error.message); }
     this.render();
+  }
+
+  async demo() {
+    try {
+      const form = document.querySelector("#settings-form");
+      const data = await this.api("browser-preview", "POST", {
+        browser_template_mode: form.elements.browser_template_mode.value,
+        browser_title: form.elements.browser_title.value,
+        browser_body: form.elements.browser_body.value
+      });
+      this.enqueueModal("[演示] " + data.title, data.body + "\n\n仅为演示，不代表真实行情。");
+      this.toast("已显示页面弹窗并播放提示音");
+    } catch (error) { this.toast(error.message); }
   }
 
   async poll() {
